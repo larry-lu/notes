@@ -1,3 +1,3 @@
 # notes
 
-This is a notebook.
+This is a notebook with notes for computer science related topics.
