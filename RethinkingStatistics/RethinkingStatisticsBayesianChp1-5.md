@@ -973,7 +973,7 @@ Trace plot of the 3rd order regression $\mu_i = \alpha + \beta_1 x_i + \beta_2 x
 
 ![Polynomial regression 3rd order](rethinking/trace_3rd_order.png)
 
-## Multivariate linear models
+## Chp5 Multivariate linear models
 
 Reasons for multivariate models:
 
