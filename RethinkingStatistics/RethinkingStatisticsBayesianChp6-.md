@@ -195,4 +195,152 @@ $Pr(y_i)$ as the average likelihood of observation $i$ in the training sample, a
 
 $lppd = \sum_{i=1}^{N} \log Pr(y_i)$
 
-> the log-pointwise-predictive-density is the total across observations of the log-arithm of the average likelihood of each observation. 
+> the log-pointwise-predictive-density is the total across observations of the log-arithm of the average likelihood of each observation.
+
+Effective number of parameters $P_{WAIC}$. Define $V(y_i)$ as the variance in log-likelihood for observation $i$ in the training sample, and compute the log-likelihood of $y_i$ for each sample from the posteior distribution. $P_{WAIC}$ is defined as:
+
+$p_{WAIC} = \sum_{i=1}^{N}V(y_i)$
+
+And WAIC is defined as:
+
+$WAIC = -2(lppd - p_{WAIC})$
+
+Calculating the WAIC:
+
+```python
+with pm.Model() as m_6_15 :
+    a = pm.Normal('a', mu=0, sd=100)
+    b = pm.Normal('b', mu=0, sd=10)
+    sigma = pm.Uniform('sigma', 0, 30)
+    mu = pm.Deterministic('mu', a + b * data['speed'])
+    dist = pm.Normal('dist', mu=mu, sd=sigma, observed = data['dist'])
+    m_6_15 = pm.sample(1000, tune=1000)
+```
+
+log-likelihood of each observation $i$ at each sample $s$ from the posterior
+
+```python
+n_samples = 1000
+n_cases = data.shape[0]
+ll = np.zeros((n_cases, n_samples))
+
+for s in range(0, n_samples):
+    mu = m_6_15['a'][s] + m_6_15['b'][s] * data['speed']
+    p_ = stats.norm.logpdf(data['dist'], loc=mu, scale=m_6_15['sigma'][s])
+    ll[:,s] = p_
+```
+
+ll: a 50-by-1000 matrix of log-likelihoods. Then we calculate the log of sum of exponentiated terms.
+
+```python
+from scipy.special import logsumexp
+n_cases = data.shape[0]
+lppd = np.zeros((n_cases))
+for a in range(1, n_cases):
+    lppd[a,] = logsumexp(ll[a,]) - np.log(n_samples)
+```
+
+Compute the $p_{WAIC}$:
+
+```python
+pWAIC = np.zeros((n_cases))
+for i in range(1, n_cases):
+    pWAIC[i,] = np.var(ll[i,])
+```
+
+The WAIC:
+
+```python
+- 2 * (sum(lppd) - sum(pWAIC))
+#412.50672926467325
+```
+
+Calculate the standard error of WAIC by computing the square root of number of cases multiplied by the variance over the individual observation terms:
+
+```python
+waic_vec = - 2 * (lppd - pWAIC)
+np.sqrt(n_cases * np.var(waic_vec))
+```
+
+#### DIC and WAIC as estimates of deviance
+
+WAIC can be more accurate for out-of-bag estimates.
+
+Using both regularization and information criteria can help, is always better than only using one or the other.
+
+- Regularization: helps reduce overfitting for any particular model
+- Information criteria: compare overfitting across models
+
+### Using information criteria
+
+Should not use AIC/DIC/WAIC for model selection, but model *comparison* and *averaging*
+
+- Model comparison: using DIC/WAIC in combination with the estimates and posterior predictive checks from each model. 
+- - Model averaging: using DIC/WAIC to construct a posterior predictive distribution. Does not mean averaging model parameters, but prediction averaging instead.
+
+#### Model comparison
+
+```python
+d = pd.read_csv('Data/milk.csv', sep=';')
+d['neocortex'] = d['neocortex.perc'] / 100
+d.dropna(inplace=True)
+d.shape
+#17, 9
+
+a_start = d['kcal.per.g'].mean()
+sigma_start = d['kcal.per.g'].std()
+
+import theano
+
+mass_shared = theano.shared(np.log(d['mass'].values))
+neocortex_shared = theano.shared(d['neocortex'].values)
+
+with pm.Model() as m6_11:
+    alpha = pm.Normal('alpha', mu=0, sd=10, testval=a_start)
+    mu = alpha + 0 * neocortex_shared
+    sigma = pm.HalfCauchy('sigma',beta=10, testval=sigma_start)
+    kcal = pm.Normal('kcal', mu=mu, sd=sigma, observed=d['kcal.per.g'])
+    trace_m6_11 = pm.sample(1000, tune=1000)    
+
+with pm.Model() as m6_12:
+    alpha = pm.Normal('alpha', mu=0, sd=10, testval=a_start)
+    beta = pm.Normal('beta', mu=0, sd=10)
+    sigma = pm.HalfCauchy('sigma',beta=10, testval=sigma_start)
+    mu = alpha + beta * neocortex_shared
+    kcal = pm.Normal('kcal', mu=mu, sd=sigma, observed=d['kcal.per.g'])
+    trace_m6_12 = pm.sample(1000, tune=1000)
+    
+with pm.Model() as m6_13:
+    alpha = pm.Normal('alpha', mu=0, sd=10, testval=a_start)
+    beta = pm.Normal('beta', mu=0, sd=10)
+    sigma = pm.HalfCauchy('sigma', beta=10, testval=sigma_start)
+    mu = alpha + beta * mass_shared
+    kcal = pm.Normal('kcal', mu=mu, sd=sigma, observed=d['kcal.per.g'])
+    trace_m6_13 = pm.sample(1000, tune=1000)
+    
+with pm.Model() as m6_14:
+    alpha = pm.Normal('alpha', mu=0, sd=10, testval=a_start)
+    beta = pm.Normal('beta', mu=0, sd=10, shape=2)
+    sigma = pm.HalfCauchy('sigma', beta=10, testval=sigma_start)
+    mu = alpha + beta[0] * mass_shared + beta[1] * neocortex_shared
+    kcal = pm.Normal('kcal', mu=mu, sd=sigma, observed=d['kcal.per.g'])
+    trace_m6_14 = pm.sample(1000, tune=1000)
+
+pm.waic(trace_m6_14, m6_14)
+#WAIC_r(WAIC=-16.199698254670658, WAIC_se=5.8639218309423118, p_WAIC=3.7132315642314833, var_warn=1)
+```
+
+Akaike weights for $m$ models:
+
+$w_i = \frac{\exp{-\frac{1}{2}dWAIC_i}}{\sum_{j=1}^{m}\exp{(-\frac{1}{2}dWAIC_j)}}$
+
+The Akaike weights always add up to 1 for all models, with larger weight suggesting better model.
+
+>A model’s weight is an estimate of the probability that the model will make the best predictions on new data, conditional on the set of models considered.
+
+Model averaging is to compute an ensemble of posterior distributions:
+
+1. Compute WAIC for each model
+2. Compute the weight for each model
+3. Combine linear model and simulated outcomes for each model
+4. Combine these values into an ensemble of predictions using the model weights as proportions
