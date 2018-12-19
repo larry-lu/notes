@@ -330,7 +330,44 @@ pm.waic(trace_m6_14, m6_14)
 #WAIC_r(WAIC=-16.199698254670658, WAIC_se=5.8639218309423118, p_WAIC=3.7132315642314833, var_warn=1)
 ```
 
-Akaike weights for $m$ models:
+Compare the 4 models:
+
+```python
+compare_df = pm.compare({m6_11:trace_m6_11,
+                        m6_12:trace_m6_12,
+                        m6_13:trace_m6_13,
+                        m6_14:trace_m6_14},
+                        method='pseudo-BMA')
+
+compare_df.loc[:,'model'] = pd.Series(['m6.11', 'm6.12', 'm6.13', 'm6.14'])
+compare_df = compare_df.set_index('model')
+compare_df
+```
+
+Output:
+| WAIC |pWAIC|dWAIC|weight| SE |dSE |var_warn|
+|-----:|----:|----:|-----:|---:|---:|-------:|
+|-17.26| 2.95| 0.00|  0.96|4.92|0.00|       1|
+| -9.03| 2.01| 8.23|  0.02|4.09|3.28|       1|
+| -8.65| 1.34| 8.61|  0.01|3.52|4.55|       0|
+| -7.45| 1.91| 9.81|  0.01|3.27|4.74|       0|
+
+> 1. `WAIC` is obviously WAIC for each model. Smaller WAIC indicates better estimated out-of-sample deviance, so model m6.14 is ranked first.
+>2. `pWAIC` is the estimated effective number of parameters. This provides a clue as to how flexible each model is in fitting the sample.
+>3. `dWAIC` is the difference between each WAIC and the lowest WAIC. Since only relative deviance matters, this column shows the differences in relative fashion.
+>4. `weight` is the Akaike weight for each model. These values are transformed information criterion values. I’ll explain them below.
+>5. `SE` is the standard error of the WAIC estimate. WAIC is an estimate, and provided the sample size $N$ is large enough, its uncertainty will be well approximated by its standard error. So this `SE` value isn’t necessarily very precise, but it does provide a check against overconfidence in differences between WAIC values.
+>6. `dSE` is the standard error of the difference in WAIC between each model and the top-ranked model. So it is missing for the top model. If you want the full set of pairwise model differences, you can extract milk.models@dSE (in `R`).
+
+Plotting the values:
+
+```python
+pm.compareplot(compare_df)
+```
+
+![Compare plot](rethinking/compare_plot.png)
+
+The weights in the table are Akaike weights for $m$ models:
 
 $w_i = \frac{\exp{-\frac{1}{2}dWAIC_i}}{\sum_{j=1}^{m}\exp{(-\frac{1}{2}dWAIC_j)}}$
 
@@ -338,9 +375,55 @@ The Akaike weights always add up to 1 for all models, with larger weight suggest
 
 >A model’s weight is an estimate of the probability that the model will make the best predictions on new data, conditional on the set of models considered.
 
+Comparing estimates:
+
+```python
+traces = [trace_m6_11, trace_m6_12, trace_m6_13, trace_m6_14]   
+models = [m6_11, m6_12, m6_13, m6_14]
+
+plt.figure(figsize=(10, 8))
+pm.forestplot(traces, plot_kwargs={'fontsize':14})
+```
+
+![Compare estimates](rethinking/compare_estimates.png)
+
 Model averaging is to compute an ensemble of posterior distributions:
 
 1. Compute WAIC for each model
 2. Compute the weight for each model
 3. Combine linear model and simulated outcomes for each model
 4. Combine these values into an ensemble of predictions using the model weights as proportions
+
+```python
+kcal_per_g = np.repeat(0, 30) # empty outcome
+neocortex = np.linspace(0.5, 0.8, 30) # sequence of neocortex
+mass = np.repeat(4.5, 30)     # average mass
+
+mass_shared.set_value(np.log(mass))
+neocortex_shared.set_value(neocortex)
+post_pred = pm.sample_ppc(trace_m6_14, samples=10000, model=m6_14)
+
+milk_ensemble = pm.sample_ppc_w(traces, 10000,
+                                models, weights=compare_df.weight.sort_index(ascending=True))
+```
+
+```python
+plt.figure(figsize=(8, 6))
+
+plt.plot(neocortex, post_pred['kcal'].mean(0), ls='--', color='C2')
+hpd_post_pred = pm.hpd(post_pred['kcal'])
+plt.plot(neocortex,hpd_post_pred[:,0], ls='--', color='C2')
+plt.plot(neocortex,hpd_post_pred[:,], ls='--', color='C2')
+
+plt.plot(neocortex, milk_ensemble['kcal'].mean(0), color='C0')
+hpd_av = pm.hpd(milk_ensemble['kcal'])
+plt.fill_between(neocortex, hpd_av[:,0], hpd_av[:,1], alpha=0.1, color='C0')
+
+plt.scatter(d['neocortex'], d['kcal.per.g'], facecolor='None', edgecolors='C0')
+
+plt.ylim(0.3, 1)
+plt.xlabel('neocortex', fontsize=16)
+plt.ylabel('kcal.per.g', fontsize=16)
+```
+
+![Compare estimates](rethinking/ensemble.png)
