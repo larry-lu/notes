@@ -4,7 +4,7 @@ Conditioning: data is conditional on how the sampling methods and procedures.
 
 Simple linear models assume no conditioning and independent association with the mean of the outcome, therefore cannot handle interaction.
 
-Example: influecne of ruggedness on GDP per capita for African and non-African countries.
+Example: influence of ruggedness on GDP per capita for African and non-African countries.
 
 ![Africa and Non-Africa](rethinking/Africa_NonAfrica.png)
 
@@ -210,7 +210,7 @@ for iAfri in range(0,2):
     mu_ruggedhi[iAfri] = trace_7_5b['a'] + trace_7_5b['bR'] * q_rugged[1] + \
                               trace_7_5b['bAR'] * q_rugged[1] * iAfri + \
                               trace_7_5b['bA'] * iAfri
-            
+
 mu_ruggedlo_mean = np.mean(mu_ruggedlo, axis=1)
 mu_hpd_ruggedlo = pm.hpd(mu_ruggedlo.T, alpha=0.03)  # 97% probability interval: 1-.97 = 0.03
 mu_ruggedhi_mean = np.mean(mu_ruggedhi, axis=1)
@@ -237,7 +237,7 @@ def adjust_spines(ax, spines):
     else:
         # no xaxis ticks
         ax.xaxis.set_ticks([])
-        
+
 # Plot it all, splitting points at median
 med_r = np.median(dd.rugged)
 # Use list comprehension to split points at median
@@ -307,3 +307,209 @@ with pm.Model() as model_7_7:
     blooms = pm.Normal('blooms', mu, sigma, observed=d.blooms)
     trace_7_7 = pm.sample(1000, tune=1000)
 ```
+
+Result:
+
+```python
+pm.summary(trace_7_6, varnames=['a', 'bW', 'bS', 'sigma'])['mean']
+pm.summary(trace_7_7, varnames=['a', 'bW', 'bS', 'sigma', 'bWS'])['mean']
+```
+
+|| m7.6 | m7.7 |
+|-----|-----:|-----:|
+|a    | 51.52|-74.38|
+|bW   | 77.12|146.45|
+|bS   |-38.76| 31.02|
+|sigma| 64.22| 52.62|
+|bWS  | N/A  |-37.61|
+
+Compare the models:
+
+|model|WAIC |pWAIC|dWAIC|weight| SE |dSE |var_warn|
+|-----|----:|----:|----:|-----:|---:|---:|-------:|
+|m7.7 |294.1| 4.21|  0.0|     1|7.15|0.00|       1|
+|m7.6 |303.6| 3.53|  9.5|     0|6.76|3.91|       1|
+
+All the weight go to model 7.7. The interpretation starts with centering the predictor variables and re-estimating the models.
+
+#### Centering and re-estimate
+
+Centering: standardize the mean to 0 without changing the variance.
+
+```python
+d.shade_c = d.shade - np.mean(d.shade)
+d.water_c = d.water - np.mean(d.water)
+```
+
+The importance of centering:
+
+1. reduce number of iteracitons necessary.
+2. make the estimates easier to interpret.
+
+Re-estimate using centered variables:
+
+```python
+with pm.Model() as model_7_8:
+    a = pm.Normal('a', mu=0, sd=100)
+    bW = pm.Normal('bW', mu=0, sd=100)
+    bS = pm.Normal('bS', mu=0, sd=100)
+    sigma = pm.Uniform('sigma', lower=0, upper=100)
+    mu = pm.Deterministic('mu', a + bW*d.water_c + bS*d.shade_c)
+    blooms = pm.Normal('blooms', mu, sigma, observed=d.blooms)
+    trace_7_8 = pm.sample(1000, tune=1000)
+    start = {'a':np.mean(d.blooms), 'bW':0, 'bS':0, 'sigma':np.std(d.blooms)}
+
+with pm.Model() as model_7_9:
+    a = pm.Normal('a', mu=0, sd=100)
+    bW = pm.Normal('bW', mu=0, sd=100)
+    bS = pm.Normal('bS', mu=0, sd=100)
+    bWS = pm.Normal('bWS', mu=0, sd=100)
+    sigma = pm.Uniform('sigma', lower=0, upper=100)
+    mu = pm.Deterministic('mu', a + bW*d.water_c + bS*d.shade_c + bWS*d.water_c*d.shade_c)
+    blooms = pm.Normal('blooms', mu, sigma, observed=d.blooms)
+    trace_7_9 = pm.sample(1000, tune=1000)
+    start = {'a':np.mean(d.blooms), 'bW':0, 'bS':0, 'bWS':0, 'sigma':np.std(d.blooms)}
+```
+
+Find MAP
+
+```python
+map_7_8 = pm.find_MAP(model=model_7_8)
+map_7_8
+
+map_7_9 = pm.find_MAP(model=model_7_9)
+map_7_9
+```
+
+|index| mean | mean |
+|-----|-----:|-----:|
+|a    |127.31|127.88|
+|bW   | 73.94| 74.72|
+|bS   |-40.44|-40.72|
+|sigma| 63.82| 51.93|
+|bWS  |  N/A |-51.40|
+
+After centering, the models are easier to compare.
+
+Why centering works?
+
+1. Estimation works better since centered values are easier to optimize.
+2. Estimates change less across models.
+3. Intercept becomes meaningful — the grand mean of the outcome variable
+
+Read the improved, centered estimates:
+
+|index| mean | sd  |mc_error|hpd_5.5|hpd_94.5|n_eff |Rhat |
+|-----|-----:|----:|-------:|------:|-------:|-----:|----:|
+|a    |127.88|10.26|   0.271| 112.00|  144.15|1736.4| 1.00|
+|bW   | 74.72|12.22|   0.276|  54.98|   93.31|1914.9| 1.00|
+|bS   |-40.72|12.31|   0.289| -60.96|  -21.39|1888.8| 1.00|
+|bWS  |-51.40|14.63|   0.281| -73.14|  -27.81|2038.4| 1.00|
+|sigma| 51.93| 8.19|   0.227|  39.37|   64.04|1374.7| 1.00|
+
+- The estimate `a`, $\alpha$, is the expected value of `blooms` when both `water` and `shade` are at their average values (0 since centered).
+- The estimate `bW`, $\beta_W$, is the expected change in `blooms` when `water` increases by one unite and `shade` is at its average value (0). When `shade` is at its average value, increasing `water` is highly beneficial to blooms.
+- The estimate `bS`, $\beta_S$, is the expected change in `blooms` when `shade` increases by one unit and `water` is at its average value (0). When `water` is at its average value, increasing `shade` is highly detrimental to the blooms.
+- The estimate `bWS`, $\beta_{WS}$, is the interaction effect. It tells us 1) **the expected change in the influence of `water` on blooms when increasing `shade` by one unit.** 2)**The expected change in the influence of `shade` on blooms when increasing `water` by one unit.**
+
+>So why is the interaction estimate, bWS, negative? The short answer is that water and shade have opposite effects on blooms, but that each also makes the other more important to the outcome. If you don’t see how to read that from the number −52, you are in good company. And that’s why the best thing to do is to plot implied predictions.
+
+#### Plotting implied predictions
+
+**Triptych**: three-column plot to show interactions.
+
+```python
+f, axs = plt.subplots(1, 3, sharey=True, figsize=(8,3))
+# Loop over values of water_c and plot predictions.
+shade_seq = range(-1, 2, 1)
+
+mu_w = np.zeros((len(shade_seq), len(trace_7_9['a'])))
+for ax, w in zip(axs.flat, range(-1, 2, 1)):
+    dt = d[d.water_c == w]
+    ax.plot(dt.shade-np.mean(dt.shade), dt.blooms, 'C0o')
+    for x, iSeq in enumerate(shade_seq):
+        mu_w[x] = trace_7_9['a'] + trace_7_9['bW'] * w + trace_7_9['bS'] * iSeq + trace_7_9['bWS'] * w * iSeq
+    mu_mean_w = mu_w.mean(1)
+    mu_hpd_w = pm.hpd(mu_w.T, alpha=0.03)  # 97% probability interval: 1-.97 = 0.03
+    ax.plot(shade_seq, mu_mean_w, 'k')
+    ax.plot(shade_seq, mu_hpd_w.T[0], 'k--')
+    ax.plot(shade_seq, mu_hpd_w.T[1], 'k--')
+    ax.set_ylim(0,362)
+    ax.set_ylabel('blooms')
+    ax.set_xlabel('shade (centered)')
+    ax.set_title('water_c = {:d}'.format(w))
+    ax.set_xticks(shade_seq)
+    ax.set_yticks(range(0, 301, 100))
+```
+
+![interactions](rethinking/interactions.png)
+
+When water level is low, shade has little effect given uncertain positive trend. At mean water level (c=0), increasing shade reduces size of blooms. At highest water value, the slope becomes more negative, and shade is an even stronger predictor of smaller blooms.
+
+We can also make the interaction plot using water on horizontal axis and shade level varies from left to right.
+
+![interactions](rethinking/interaction2.png)
+
+### Interactions in design formulas
+
+#### Model with interactions and main effects
+
+The model:
+
+$y_i \sim N(\mu_i, \sigma)$
+$\mu_i = \alpha + \beta_xx_i + \beta_zz_i + \beta_{xz}x_iz_i$
+
+In `R`:
+
+```r
+m7.x <- lm( y ~ x + z + x*z , data=d )
+```
+
+In `python`:
+
+```python
+import statsmodels.formula.api as smf
+m_7_x = smf.ols('blooms ~ shade + water + shade * water', data=d).fit()
+```
+
+#### Model with interactions and partial main effects
+
+When you do not want the main effect of one variable
+
+The model:
+
+$y_i \sim N(\mu_i, \sigma)$
+$\mu_i = \alpha + \beta_xx_i + \beta_{xz}x_iz_i$
+
+In `R`:
+
+```r
+m7.x <- lm( y ~ x + x*z - z , data=d )
+```
+
+In `python`:
+
+```python
+m_7_x = smf.ols('blooms ~ shade * water - water', data=d).fit()
+```
+
+#### Model with higher order interactions
+
+The model:
+
+$y_i \sim N(\mu_i, \sigma)$
+$\mu_i = \alpha + \beta_xx_i + \beta_zz_i + \beta_ww_i + \beta_{xw}x_iw_i + \beta_{zw}z_iw_i + \beta_{xz}x_iz_i + \beta_{xzw}x_iz_iw_i$
+
+In `R`:
+
+```r
+m7.x <- lm( y ~ x*z*w , data=d )
+```
+
+In `python`:
+
+```python
+m_7_x = smf.ols('blooms ~ shade * water * bed', data=d).fit()
+```
+
+Any lower-order interactions or main effects can be explicitly subtracted to construct a reduced model.
