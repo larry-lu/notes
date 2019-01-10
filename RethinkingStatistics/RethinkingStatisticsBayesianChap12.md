@@ -526,3 +526,128 @@ pred_p_PI = pm.hpd(pred_raw, alpha=.11)
 ```
 
 ### posterior prediction for new clusters
+
+Create list of different treatments
+
+```python
+d_pred = pd.DataFrame(dict(prosoc_left=[0, 1, 0, 1],
+                           condition=[0, 0, 1, 1], 
+                           actor = np.repeat(2-1,4)))
+
+# replace varying intercept samples with zeros
+# 1000 samples by 7 actors
+a_actor_zeros = np.zeros((1000,7))
+```
+
+```python
+def p_link(prosoc_left, condition, actor_sim, trace):
+    Nsim = actor_sim.shape[0]//trace.nchains
+    trace = trace[:Nsim]
+    logodds = trace['a'] + \
+                np.mean(trace['a_actor']*actor_sim, axis=1) + \
+                (trace['bp'] + trace['bpC'] * condition) * prosoc_left
+    return logistic(logodds)
+
+#get the predictions
+pred_raw = np.asarray([p_link(p_l, c_d, a_actor_zeros, trace_12_4) 
+                       for p_l, c_d in zip(prosoc_left, condition)]).T
+pred_p = pred_raw.mean(axis=0)
+pred_p_PI = pm.hpd(pred_raw, alpha=.11)
+
+#simulate 50 actors
+def sim_actor(tr, i):
+    sim_a_actor = np.random.randn()*tr['sigma_actor'][i]
+    P = np.array([0, 1, 0, 1])
+    C = np.array([0, 1, 0, 1])
+    p = logistic(tr['a'][i] + sim_a_actor + (tr['bp'][i] + tr['bpC'][i]*C)*P)
+    return p
+```
+
+Create the plot:
+
+```python
+fig, (ax0, ax1, ax2) = plt.subplots(1, 3, figsize=(12, 5))
+
+pred_raw = np.asarray([p_link(p_l, c_d, a_actor_zeros, trace_12_4) 
+                       for p_l, c_d in zip(prosoc_left, condition)]).T
+pred_p = pred_raw.mean(axis=0)
+pred_p_PI = pm.hpd(pred_raw, alpha=.11)
+
+ax0.fill_between(range(4), pred_p_PI[:,1], pred_p_PI[:,0], alpha=0.25, color='k')
+ax0.plot(pred_p, color='k')
+ax0.set_ylim(0, 1.1)
+ax0.set_xlabel("prosoc_left/condition", fontsize=14)
+ax0.set_ylabel("proportion pulled left", fontsize=14)
+ax0.set_xticks(range(4), ("0/0","1/0","0/1","1/1"))
+ax0.set_title('average_actor')
+
+pred_raw = np.asarray([p_link(p_l, c_d, a_actor_sims, trace_12_4) 
+                       for p_l, c_d in zip(prosoc_left, condition)]).T
+pred_p = pred_raw.mean(axis=0)
+pred_p_PI = pm.hpd(pred_raw, alpha=.11)
+
+ax1.fill_between(range(4), pred_p_PI[:,1], pred_p_PI[:,0], alpha=0.25, color='k')
+ax1.plot(pred_p, color='k')
+ax1.set_ylim(0, 1.1)
+ax1.set_xlabel("prosoc_left/condition", fontsize=14)
+ax1.set_ylabel("proportion pulled left", fontsize=14)
+ax1.set_xticks(range(4), ("0/0","1/0","0/1","1/1"))
+ax1.set_title('marginal of actor')
+
+for i in range(50):
+    ax2.plot(sim_actor(trace_12_4, i), color='k', alpha=.15)
+ax2.set_ylim(0, 1.1)
+ax2.set_xticks(range(4), ("0/0","1/0","0/1","1/1"))
+ax2.set_xlabel("prosoc_left/condition", fontsize=14)
+ax2.set_ylabel("proportion pulled left", fontsize=14)
+ax2.set_xticks(range(4), ("0/0","1/0","0/1","1/1"))
+ax2.set_title('50 simulated actors')
+```
+
+![chimpanzee model](rethinking/posterior_prediction_chimpanzee_models.png)
+
+Above illustrated are three ways to visualize the predictions. All three ways to create predictions make sense. In reality, choose the one that fits the research context. Simulated results show distinct zig-zag pattern and we can see the variations.
+
+### Focus and multilevel prediction
+
+Multilevel models contain parameters with different focus. There are parameters that influence predictions directly, and also hyperparameters that influence the predictions by affecting the parameters.
+
+The oceanic societies example:
+
+$T_i \sim \text{Poisson}(\mu_i)$
+$\log(\mu_i) = \alpha + \alpha_{\text{SOCIETY}[i]} + \beta_P \log P_i$
+$\alpha \sim \text{Normal}(0, 10)$
+$\beta_P \sim \text{Normal}(0, 1)$
+$\alpha_{\text{SOCIETY}} \sim \text{Normal}(0, \sigma_{\text{SOCIETY}})$
+$\sigma_{\text{SOCIETY}} \sim \text{HalfCauchy}(0, 1)$
+
+$T$ is `total_tools`, $P$ is `population`, and $i$ indexes each society.
+
+```python
+dk = pd.read_csv('Data/Kline', sep=";")
+dk.loc[:, 'log_pop'] = np.log(dk.population)
+Nsociety = dk.shape[0]
+dk.loc[:, 'society'] = np.arange(Nsociety)
+
+with pm.Model() as m_12_6:
+    sigma_society = pm.HalfCauchy('sigma_society', 1)
+    a_society = pm.Normal('a_society', 0, sigma_society, shape=Nsociety),
+    a = pm.Normal('a', 0, 10)
+    bp = pm.Normal('bp', 0, 1)
+    lam = pm.math.exp(a + a_society + bp*dk.log_pop)
+    obs = pm.Poisson('total_tools', lam, observed=dk.total_tools)
+    trace_12_6 = pm.sample(5000, tune=1000, njobs=4)
+```
+
+Generate posterior predictions that visualize the over-dispersion.
+
+```python
+sigma_society = trace_12_6.get_values('sigma_society', combine=True)[:, None]
+a_society_sims = np.random.normal(loc=0, scale=sigma_society)
+log_pop_seq = np.linspace(6, 14, 30)
+a_post = trace_12_6.get_values(varname='a', combine=True)[:, None]
+bp_post = trace_12_6.get_values(varname='bp', combine=True)[:, None]
+link_m12_6 = np.exp(a_post + a_society_sims + bp_post*log_pop_seq)
+```
+
+![posterior prediction](rethinking/posterior_tools.png)
