@@ -5,6 +5,7 @@ Model:
 $\mu_i = \alpha_{\text{CAFE}[i]} + \beta_{\text{cafe}[i]}A_i$
 
 Sampled different values for intercept and slope should be pooled. But the intercepts and slopes may covary.
+
 Example: a busy cafe would be much less busy in the afternoon, while an unpopular one won't differ much. In other words, the slope and intercept covary/correlate. If we can pool the information across different parameters, it would be helpful. Covariation of variables can be modeled using Gaussian processes.
 
 ## Varying slopes by construction
