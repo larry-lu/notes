@@ -562,4 +562,166 @@ Unlike typical varying intercepts, the varying intercepts will be estimated usin
 $\gamma \sim \text{MVNormal}([0, \dots, 0], K)$
 $K_{ij} = \eta^2\exp(-\rho^2 D_{ij}^2)+\delta_{ij}\sigma^2$
 
-The 10-dimensional Gaussian prior for 10 intercepts all have zero means since we have included overall intercept in the linear model.
+The 10-dimensional Gaussian prior for 10 intercepts all have zero means since we have included overall intercept in the linear model. $K$ is the cavariance matrix, and $K_{ij}$ is the covariance between societies $i$ and $j$. $\eta^2$ is the maximum covariance between any two societies $i$ and $j$. $\delta_{ij}\sigma^2$ provides for extra covariance beyond $\eta^2$ when i = j.
+
+the squared distance is a useful and convenient model. Plot the functions:
+
+```python
+f, ax = plt.subplots(1, 1, figsize=(5, 5))
+xrange = np.linspace(0, 4, 100)
+ax.plot(xrange, np.exp(-1*xrange), color='gray', ls='--', label='1st order')
+ax.plot(xrange, np.exp(-1*xrange**2), 'k', label='squared')
+ax.set_xlabel('distance', fontsize=14)
+ax.set_ylabel('correlation', fontsize=14)
+ax.legend()
+```
+
+![distance and correlation](rethinking/squared_distance.png)
+
+The full model:
+
+$T_i \sim \text{Poisson}(\lambda_i)$
+$\log(\lambda_i) = \alpha + \gamma_{\text{SOCIETY}[i]} + \beta_P \log P_i$
+$\gamma \sim \text{MVNormal}([0, \dots, 0], K)$
+$K_{ij} = \eta^2\exp(-\rho^2 D_{ij}^2)+\delta_{ij}\sigma^2$
+$\alpha \sim \text{Normal}(0, 10)$
+$\beta_P \sim \text{Normal}(0, 1)$
+$\eta^2 \sim \text{HalfCauchy}(0, 1)$
+$\rho^2 \sim \text{HalfCauchy}(0, 1)$
+
+Fitting the model:
+
+```python
+dk = pd.read_csv('Data/Kline2.csv', sep=",")
+Nsociety = dk.shape[0]
+dk.loc[:, 'society'] = np.arange(Nsociety)
+Dmat_ = Dmat.values
+Dmatsq = np.power(Dmat_, 2)
+
+with pm.Model() as m_13_7:
+    etasq = pm.HalfCauchy('etasq', 1)
+    rhosq = pm.HalfCauchy('rhosq', 1)
+    Kij = etasq*(tt.exp(-rhosq*Dmatsq)+np.diag([.01]*Nsociety))
+
+    g = pm.MvNormal('g', mu=np.zeros(Nsociety), cov=Kij, shape=Nsociety)
+
+    a = pm.Normal('a', 0, 10)
+    bp = pm.Normal('bp', 0, 1)
+    lam = pm.math.exp(a + g[dk.society.values] + bp*dk.logpop)
+    obs = pm.Poisson('total_tools', lam, observed=dk.total_tools)
+    trace_13_7 = pm.sample(1000, tune=1000)
+
+pm.traceplot(trace_13_7, varnames=['g', 'a', 'bp', 'etasq', 'rhosq'])
+```
+
+![trace plot](rethinking/trace_varying_islands.png)
+
+```python
+pm.summary(trace_13_7, varnames=['g', 'a', 'bp', 'etasq', 'rhosq']).round(2)
+```
+
+||mean | sd |mc_error|hpd_2.5|hpd_97.5|n_eff|Rhat|
+|-----|----:|---:|-------:|------:|-------:|----:|---:|
+|g__0 |-0.24|0.43|    0.02|  -1.15|    0.58|255.3|1.00|
+|g__1 |-0.12|0.42|    0.02|  -0.93|    0.79|248.9|1.00|
+|g__2 |-0.15|0.41|    0.02|  -1.02|    0.64|257.2|1.00|
+|g__3 | 0.32|0.38|    0.02|  -0.42|    1.12|250.6|1.00|
+|g__4 | 0.06|0.37|    0.02|  -0.74|    0.78|271.4|1.00|
+|g__5 |-0.43|0.37|    0.02|  -1.28|    0.18|276.6|1.00|
+|g__6 | 0.11|0.36|    0.02|  -0.65|    0.77|269.9|1.00|
+|g__7 |-0.24|0.36|    0.02|  -1.01|    0.47|268.6|1.00|
+|g__8 | 0.25|0.35|    0.02|  -0.43|    0.96|313.1|1.00|
+|g__9 |-0.11|0.46|    0.02|  -1.09|    0.74|501.4|1.00|
+|a    | 1.26|1.17|    0.06|  -1.17|    3.41|375.6|1.00|
+|bp   | 0.25|0.12|    0.01|   0.02|    0.47|474.7|1.00|
+|etasq| 0.33|0.40|    0.02|   0.01|    1.01|444.4|1.01|
+|rhosq| 1.49|6.82|    0.28|   0.01|    3.84|574.4|1.00|
+
+Plot the median density for covariance and distance:
+
+```python
+post = pm.trace_to_dataframe(trace_13_7, varnames=['g', 'a', 'bp', 'etasq', 'rhosq'])
+post_etasq = post['etasq'].values
+post_rhosq = post['rhosq'].values
+
+_, ax = plt.subplots(1, 1, figsize=(8, 5))
+xrange = np.linspace(0, 10, 200)
+
+ax.plot(xrange, np.median(post_etasq) * np.exp(-np.median(post_rhosq) * xrange**2), 'k')
+ax.plot(xrange, (post_etasq[:100][:, None] * np.exp(-post_rhosq[:100][:, None] * xrange**2)).T,
+        'k', alpha=.1)
+
+ax.set_ylim(0, 1)
+ax.set_xlabel('distance')
+ax.set_ylabel('correlation');
+```
+
+![posterior covariance](rethinking/posterior_covariance.png)
+
+The above chart is produced using different combinations of $\rho^2$ and $\eta^2$. The majority of the posterior curves decine to zero covariance before 4 km. Hard to interpret the covariances since on log-scale. We can push the parameters back through the function for $K$, the covariance matrix
+
+```python
+# compute posterior median covariance among societies
+Kij_post = np.median(post_etasq) * (np.exp(-np.median(post_rhosq) * Dmatsq) + np.diag([.01] * Nsociety))
+```
+
+And convert $K$ to a correlation matrix:
+
+```python
+# convert to correlation matrix
+sigma_post = np.sqrt(np.diag(Kij_post))
+Rho = np.diag(sigma_post**-1).dot(Kij_post.dot(np.diag(sigma_post**-1)))
+# add row/col names for convenience
+Rho = pd.DataFrame(Rho, index=["Ml","Ti","SC","Ya","Fi","Tr","Ch","Mn","To","Ha"],
+                  columns=["Ml","Ti","SC","Ya","Fi","Tr","Ch","Mn","To","Ha"])
+
+Rho.round(2)
+```
+
+|| Ml | Ti | SC | Ya | Fi | Tr | Ch | Mn | To |Ha |
+|-----|---:|---:|---:|---:|---:|---:|---:|---:|---:|--:|
+|Ml   |1.00|0.90|0.84|0.00|0.52|0.17|0.01|0.04|0.23|  0|
+|Ti   |0.90|1.00|0.95|0.00|0.52|0.18|0.03|0.05|0.19|  0|
+|SC   |0.84|0.95|1.00|0.00|0.36|0.29|0.06|0.09|0.11|  0|
+|Ya   |0.00|0.00|0.00|1.00|0.00|0.08|0.36|0.33|0.00|  0|
+|Fi   |0.52|0.52|0.36|0.00|1.00|0.01|0.00|0.00|0.77|  0|
+|Tr   |0.17|0.18|0.29|0.08|0.01|1.00|0.25|0.73|0.00|  0|
+|Ch   |0.01|0.03|0.06|0.36|0.00|0.25|1.00|0.53|0.00|  0|
+|Mn   |0.04|0.05|0.09|0.33|0.00|0.73|0.53|1.00|0.00|  0|
+|To   |0.23|0.19|0.11|0.00|0.77|0.00|0.00|0.00|1.00|  0|
+|Ha   |0.00|0.00|0.00|0.00|0.00|0.00|0.00|0.00|0.00|  1|
+
+Small clustered societies (Ml, Ti, SC) are highly correlated. Hawaii being far from all other societies have zero correlations. To plot the variation of correlation:
+
+```python
+# scale point size to logpop
+logpop = np.copy(dk['logpop'].values)
+logpop /= logpop.max()
+psize = np.exp(logpop*5.5)
+
+_, ax = plt.subplots(1, 1, figsize=(5, 5))
+ax.scatter(dk['lon2'], dk['lat'], psize);
+labels = dk['culture'].values
+for i, itext in enumerate(labels):
+    ax.text(dk['lon2'][i]+1, dk['lat'][i]+1, itext)
+# overlay lines shaded by Rho
+for i in range(10):
+    for j in np.arange(i+1, 10):
+        ax.plot([dk['lon2'][i], dk['lon2'][j]],
+                [dk['lat'][i], dk['lat'][j]], 'k-', 
+                alpha=Rho.iloc[i, j]**2, lw=2.5)
+ax.set_xlabel('longitude')
+ax.set_ylabel('latitude');
+```
+
+![covariance islands](rethinking/island_covariance.png)
+
+Darker lines represent stronger correlations.
+
+![tools population](rethinking/tools_population.png)
+
+It can be seen that Ml, Ti, and SC are spatially correlated, and all below the expectation given the population. Fiji would have lower level of tools if not for the correlation with Tonga.
+
+### Other kinds of distance
+
+The definition of K is not necessarily Euclidean distance, can be network distance, cosine distance, or any other distance.
